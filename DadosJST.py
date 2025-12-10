@@ -33,13 +33,15 @@ def calculate_indices(df):
     """
     # 1. Nominal Accumulation (Wealth Index)
     # We assume returns are in decimals (e.g., 0.05 for 5%). 
-    # If the user data is in percent (e.g., 5.0), this logic needs adjustment, 
-    # but standard JST data is usually decimals.
     
     # We use cumprod() to compound the returns
     # We add a 'base' of 1.0 to start the series calculation
     df['eq_idx_nominal'] = (1 + df['eq_tr']).cumprod()
     df['bond_idx_nominal'] = (1 + df['bond_tr']).cumprod()
+    
+    # Handle Bill Rate (Risk Free) if present, otherwise handle gracefully if user forgot it
+    # But since we enforced it in validation, we assume it's here.
+    df['bill_idx_nominal'] = (1 + df['bill_rate']).cumprod()
     
     # CPI is already an index, but we ensure it's treated as float
     df['cpi_idx'] = df['cpi'].astype(float)
@@ -49,6 +51,7 @@ def calculate_indices(df):
     # We simply divide the calculated Nominal Index by the CPI Index
     df['eq_idx_real'] = df['eq_idx_nominal'] / df['cpi_idx']
     df['bond_idx_real'] = df['bond_idx_nominal'] / df['cpi_idx']
+    df['bill_idx_real'] = df['bill_idx_nominal'] / df['cpi_idx']
     
     return df
 
@@ -123,7 +126,7 @@ def main():
     with st.expander("ℹ️ Data Format & Logic Guide"):
         st.markdown("""
         **How the app interprets your data:**
-        * **Returns (`eq_tr`, `bond_tr`):** Expected as **decimals** (e.g., `0.05` for 5%, not `5.0`). The app calculates the cumulative product of `(1 + return)`.
+        * **Returns (`eq_tr`, `bond_tr`, `bill_rate`):** Expected as **decimals** (e.g., `0.05` for 5%, not `5.0`). The app calculates the cumulative product of `(1 + return)`.
         * **CPI (`cpi`):** Expected as a **Price Index Level** (e.g., `100` or `4.5`).
             * *Note:* The app handles any base year (e.g., 1990=100) automatically. It uses the ratio between years to determine inflation, so the absolute starting number doesn't matter.
         * **Real Returns:** Calculated as `Nominal Index / CPI Index`.
@@ -131,7 +134,7 @@ def main():
         """)
 
     st.markdown("""
-    This tool visualizes **Nominal vs. Real** returns for Equities and Bonds based on the JST Macrohistory dataset format.
+    This tool visualizes **Nominal vs. Real** returns for Equities, Bonds, and Bills (Risk-Free) based on the JST Macrohistory dataset format.
     Upload your `.xlsx` file to begin.
     """)
 
@@ -143,7 +146,7 @@ def main():
         
         if df_raw is not None:
             # Validate Columns
-            required_cols = {'year', 'country', 'cpi', 'eq_tr', 'bond_tr'}
+            required_cols = {'year', 'country', 'cpi', 'eq_tr', 'bond_tr', 'bill_rate'}
             if not required_cols.issubset(df_raw.columns):
                 st.error(f"Missing columns! The file must contain: {', '.join(required_cols)}")
                 st.stop()
@@ -191,50 +194,68 @@ def main():
             chart_data['Display Eq Real'] = rebase_series(chart_data['eq_idx_real'])
             chart_data['Display Bond Nominal'] = rebase_series(chart_data['bond_idx_nominal'])
             chart_data['Display Bond Real'] = rebase_series(chart_data['bond_idx_real'])
+            chart_data['Display Bill Nominal'] = rebase_series(chart_data['bill_idx_nominal'])
+            chart_data['Display Bill Real'] = rebase_series(chart_data['bill_idx_real'])
 
             # 4. Visualization
             st.subheader(f"Asset Performance: {selected_country} ({selected_years[0]} - {selected_years[1]})")
             st.caption("All values rebased to 100 at the start of the selected period.")
 
             # Define Plot Traces
+            # Colors: Equities=Blue, Bonds=Orange, Bills=Green, CPI=Gray
             t_cpi = {'col': 'Display CPI', 'name': 'CPI (Inflation)', 'color': 'gray', 'dash': 'dot'}
+            
             t_eq_nom = {'col': 'Display Eq Nominal', 'name': 'Equities (Nominal)', 'color': '#1f77b4', 'dash': 'solid'}
             t_eq_real = {'col': 'Display Eq Real', 'name': 'Equities (Real)', 'color': '#1f77b4', 'dash': 'dash'}
+            
             t_bond_nom = {'col': 'Display Bond Nominal', 'name': 'Bonds (Nominal)', 'color': '#ff7f0e', 'dash': 'solid'}
             t_bond_real = {'col': 'Display Bond Real', 'name': 'Bonds (Real)', 'color': '#ff7f0e', 'dash': 'dash'}
+            
+            t_bill_nom = {'col': 'Display Bill Nominal', 'name': 'Risk-Free (Nominal)', 'color': '#2ca02c', 'dash': 'solid'}
+            t_bill_real = {'col': 'Display Bill Real', 'name': 'Risk-Free (Real)', 'color': '#2ca02c', 'dash': 'dash'}
 
             # Create Tabs
             tab_all, tab_nom, tab_real = st.tabs(["All Data", "Nominal Returns", "Real Returns"])
 
             with tab_all:
                 st.markdown("##### Overview: Nominal vs Real")
-                fig_all = create_chart(chart_data, [t_cpi, t_eq_nom, t_eq_real, t_bond_nom, t_bond_real], use_log_scale)
+                fig_all = create_chart(chart_data, 
+                                       [t_cpi, t_eq_nom, t_eq_real, t_bond_nom, t_bond_real, t_bill_nom, t_bill_real], 
+                                       use_log_scale)
                 st.plotly_chart(fig_all, use_container_width=True)
 
             with tab_nom:
                 st.markdown("##### Nominal Returns (Before Inflation)")
-                fig_nom = create_chart(chart_data, [t_cpi, t_eq_nom, t_bond_nom], use_log_scale)
+                fig_nom = create_chart(chart_data, 
+                                       [t_cpi, t_eq_nom, t_bond_nom, t_bill_nom], 
+                                       use_log_scale)
                 st.plotly_chart(fig_nom, use_container_width=True)
                 
             with tab_real:
                 st.markdown("##### Real Returns (Purchasing Power)")
-                fig_real = create_chart(chart_data, [t_cpi, t_eq_real, t_bond_real], use_log_scale)
+                fig_real = create_chart(chart_data, 
+                                        [t_cpi, t_eq_real, t_bond_real, t_bill_real], 
+                                        use_log_scale)
                 st.plotly_chart(fig_real, use_container_width=True)
 
             # 5. Summary Stats Table
             with st.expander("See Underlying Data & Statistics"):
                 # Calculate CAGR for the period
-                # CAGR = (End_Value / Start_Value)^(1/n) - 1
                 n_years = max(1, len(chart_data) - 1)
                 
                 stats = []
-                for col, name in [
+                # Helper list for iteration
+                metrics_list = [
                     ('Display Eq Nominal', 'Equity Nominal'),
                     ('Display Eq Real', 'Equity Real'),
                     ('Display Bond Nominal', 'Bond Nominal'),
                     ('Display Bond Real', 'Bond Real'),
+                    ('Display Bill Nominal', 'Risk-Free (Nominal)'),
+                    ('Display Bill Real', 'Risk-Free (Real)'),
                     ('Display CPI', 'CPI')
-                ]:
+                ]
+                
+                for col, name in metrics_list:
                     start_val = chart_data[col].iloc[0]
                     end_val = chart_data[col].iloc[-1]
                     total_ret = (end_val / start_val) - 1
